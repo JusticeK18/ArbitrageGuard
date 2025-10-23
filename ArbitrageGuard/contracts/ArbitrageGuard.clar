@@ -216,4 +216,82 @@
     )
 )
 
+;; Executes an arbitrage trade based on ML prediction with comprehensive validation and tracking
+;; This is the core function that integrates ML predictions with on-chain execution
+(define-public (execute-ml-arbitrage-trade 
+    (trade-amount uint) 
+    (predicted-profit uint) 
+    (confidence-score uint)
+    (source-exchange (string-ascii 20))
+    (target-exchange (string-ascii 20)))
+    (let
+        (
+            (operator-authorized (default-to false (map-get? authorized-operators tx-sender)))
+            (current-trade-id (var-get trade-count))
+            (model-ver (var-get current-model-version))
+        )
+        ;; Authorization and validation checks
+        (asserts! operator-authorized err-unauthorized)
+        (asserts! (var-get bot-active) err-bot-paused)
+        (asserts! (not (var-get circuit-breaker-active)) err-circuit-breaker-active)
+        (asserts! (>= confidence-score min-confidence-score) err-invalid-confidence)
+        (asserts! (>= (var-get total-funds) trade-amount) err-insufficient-funds)
+        (asserts! (<= (calculate-percentage trade-amount (var-get total-funds)) max-trade-percentage) err-max-trade-exceeded)
+        (asserts! (>= block-height (+ (var-get last-trade-block) trade-cooldown-blocks)) err-cooldown-active)
+        
+        ;; Execute the trade (simulated profit/loss calculation)
+        ;; In production, this would interface with actual DEX protocols
+        (let
+            (
+                ;; Simulate actual profit based on confidence and market volatility
+                (actual-profit-int (if (>= confidence-score u85)
+                    (to-int predicted-profit)
+                    (- (to-int predicted-profit) (to-int (/ predicted-profit u10)))
+                ))
+                (trade-successful (>= actual-profit-int 0))
+            )
+            
+            ;; Update global statistics
+            (var-set trade-count (+ current-trade-id u1))
+            (var-set last-trade-block block-height)
+            
+            ;; Update profit/loss tracking
+            (if trade-successful
+                (var-set total-profit (+ (var-get total-profit) (to-uint actual-profit-int)))
+                (var-set total-loss (+ (var-get total-loss) (to-uint (- 0 actual-profit-int))))
+            )
+            
+            ;; Record trade in history
+            (map-set trade-history current-trade-id
+                {
+                    trade-id: current-trade-id,
+                    amount: trade-amount,
+                    predicted-profit: predicted-profit,
+                    actual-profit: actual-profit-int,
+                    confidence-score: confidence-score,
+                    model-version: model-ver,
+                    block-height: block-height,
+                    success: trade-successful
+                }
+            )
+            
+            ;; Update model performance metrics
+            (update-model-metrics model-ver trade-successful confidence-score actual-profit-int)
+            
+            ;; Check and trigger circuit breaker if necessary
+            (if (should-trigger-circuit-breaker)
+                (var-set circuit-breaker-active true)
+                false
+            )
+            
+            (ok {
+                trade-id: current-trade-id,
+                executed: true,
+                profit: actual-profit-int,
+                circuit-breaker-triggered: (var-get circuit-breaker-active)
+            })
+        )
+    )
+)
+
 
